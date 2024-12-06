@@ -13,19 +13,54 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+const (
+	dockerImageFlag = "docker-image"
+	commandFlag     = "command"
+)
+
 func main() {
 	cmd := &cli.Command{
-		Name:  "greet",
-		Usage: "say a greeting",
 		Action: func(ctx context.Context, command *cli.Command) error {
-			moduleName, err := golangModuleName()
+			workingDir, err := os.Getwd()
+			if err != nil {
+				return errors.Wrap(err, "could not get current directory")
+			}
+
+			modPath, err := goModPath()
+			if err != nil {
+				return errors.Wrap(err, "could not get go mod path")
+			}
+
+			moduleName, err := golangModuleName(workingDir)
 			if err != nil {
 				return errors.WithStack(err)
 			}
 
-			fmt.Printf("module name: %s\n", moduleName)
+			cmd := prepareCommand(commandInfo{
+				workingDirectory: workingDir,
+				moduleName:       moduleName,
+				goModPath:        modPath,
+				dockerImage:      command.String(dockerImageFlag),
+				command:          command.String(commandFlag),
+			})
+
+			fmt.Printf("command: %s\n", cmd)
 
 			return nil
+		},
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     dockerImageFlag,
+				Aliases:  []string{"i"},
+				Usage:    "Docker image to use for running the command",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:     commandFlag,
+				Aliases:  []string{"c"},
+				Usage:    "Command to run inside the container",
+				Required: true,
+			},
 		},
 	}
 
@@ -36,13 +71,8 @@ func main() {
 	}
 }
 
-func golangModuleName() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", errors.Wrap(err, "could not get current directory")
-	}
-
-	file, err := os.Open(path.Join(dir, "go.mod"))
+func golangModuleName(workingDir string) (string, error) {
+	file, err := os.Open(path.Join(workingDir, "go.mod"))
 	if err != nil {
 		return "", errors.Wrap(err, "could not find or open go.mod file for reading")
 	}
@@ -66,4 +96,32 @@ func golangModuleName() (string, error) {
 	}
 
 	return "", errors.New("could not find module name in go.mod file")
+}
+
+func goModPath() (string, error) {
+	goMod := os.Getenv("GOMODCACHE")
+	if goMod == "" {
+		goMod = path.Join(os.Getenv("HOME"), "go/pkg/mod")
+	}
+
+	if goMod == "" {
+		return "", errors.New("could not find go mod path")
+	}
+
+	return goMod, nil
+}
+
+func prepareCommand(info commandInfo) string {
+	moduleContainerPath := fmt.Sprintf("/go/src/%s", info.moduleName)
+
+	return fmt.Sprintf("docker run --rm -t -i -v%s:%s -v%s:/go/pkg/mod -w%s %s %s",
+		info.workingDirectory, moduleContainerPath, info.goModPath, moduleContainerPath, info.dockerImage, info.command)
+}
+
+type commandInfo struct {
+	workingDirectory string
+	moduleName       string
+	goModPath        string
+	dockerImage      string
+	command          string
 }
