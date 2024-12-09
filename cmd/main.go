@@ -15,34 +15,20 @@ import (
 
 const (
 	dockerImageFlag = "docker-image"
-	commandFlag     = "command"
 )
 
 func main() {
 	cmd := &cli.Command{
+		Name:  "docker-go-shell",
+		Usage: "Runs a shell command in a Docker container inside of the current directory",
 		Action: func(ctx context.Context, command *cli.Command) error {
-			workingDir, err := os.Getwd()
-			if err != nil {
-				return errors.Wrap(err, "could not get current directory")
-			}
-
-			modPath, err := goModPath()
-			if err != nil {
-				return errors.Wrap(err, "could not get go mod path")
-			}
-
-			moduleName, err := golangModuleName(workingDir)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			cmd := prepareCommand(commandInfo{
-				workingDirectory: workingDir,
-				moduleName:       moduleName,
-				goModPath:        modPath,
-				dockerImage:      command.String(dockerImageFlag),
-				command:          command.String(commandFlag),
+			cmd, err := prepareCommand(commandInfo{
+				dockerImage: command.String(dockerImageFlag),
+				args:        command.Args().Slice(),
 			})
+			if err != nil {
+				return errors.Wrap(err, "could not prepare command")
+			}
 
 			fmt.Printf("command: %s\n", cmd)
 
@@ -55,12 +41,6 @@ func main() {
 				Usage:    "Docker image to use for running the command",
 				Required: true,
 			},
-			&cli.StringFlag{
-				Name:     commandFlag,
-				Aliases:  []string{"c"},
-				Usage:    "Command to run inside the container",
-				Required: true,
-			},
 		},
 	}
 
@@ -69,6 +49,30 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+func prepareCommand(info commandInfo) (string, error) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return "", errors.Wrap(err, "could not get current directory")
+	}
+
+	moduleName, err := golangModuleName(workingDir)
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
+
+	moduleContainerPath := fmt.Sprintf("/go/src/%s", moduleName)
+
+	modPath, err := goModPath()
+	if err != nil {
+		return "", errors.Wrap(err, "could not get go mod path")
+	}
+
+	args := strings.Join(info.args, " ")
+
+	return fmt.Sprintf("docker run --rm -t -i -v%s:%s -v%s:/go/pkg/mod -w%s %s %s",
+		workingDir, moduleContainerPath, modPath, moduleContainerPath, info.dockerImage, args), nil
 }
 
 func golangModuleName(workingDir string) (string, error) {
@@ -83,16 +87,23 @@ func golangModuleName(workingDir string) (string, error) {
 		}
 	}()
 
+	var moduleName string
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		text := scanner.Text()
 		if strings.HasPrefix(text, "module ") {
-			return text[7:], nil
+			moduleName = text[7:]
+			break
 		}
 	}
 
 	if err = scanner.Err(); err != nil {
 		return "", errors.Wrap(err, "could not read go.mod file")
+	}
+
+	if moduleName == "" {
+		return "", errors.New("could not determine module name")
 	}
 
 	return "", errors.New("could not find module name in go.mod file")
@@ -111,17 +122,7 @@ func goModPath() (string, error) {
 	return goMod, nil
 }
 
-func prepareCommand(info commandInfo) string {
-	moduleContainerPath := fmt.Sprintf("/go/src/%s", info.moduleName)
-
-	return fmt.Sprintf("docker run --rm -t -i -v%s:%s -v%s:/go/pkg/mod -w%s %s %s",
-		info.workingDirectory, moduleContainerPath, info.goModPath, moduleContainerPath, info.dockerImage, info.command)
-}
-
 type commandInfo struct {
-	workingDirectory string
-	moduleName       string
-	goModPath        string
-	dockerImage      string
-	command          string
+	dockerImage string
+	args        []string
 }
