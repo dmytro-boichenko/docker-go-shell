@@ -106,7 +106,7 @@ func golangModuleName(workingDir string) (string, error) {
 		return "", errors.New("could not determine module name")
 	}
 
-	return "", errors.New("could not find module name in go.mod file")
+	return moduleName, nil
 }
 
 func goModPath() (string, error) {
