@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
 
@@ -19,8 +20,9 @@ const (
 
 func main() {
 	cmd := &cli.Command{
-		Name:  "docker-go-shell",
-		Usage: "Runs a shell command in a Docker container inside of the current directory",
+		Name:    "docker-go-shell",
+		Aliases: []string{"gosh"},
+		Usage:   "Runs a shell command in a Docker container inside of the current directory",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			cmd, err := prepareCommand(commandInfo{
 				dockerImage: command.String(dockerImageFlag),
@@ -31,6 +33,11 @@ func main() {
 			}
 
 			fmt.Printf("command: %s\n", cmd)
+
+			err = runCommand(cmd)
+			if err != nil {
+				return errors.Wrap(err, "command execution error")
+			}
 
 			return nil
 		},
@@ -71,7 +78,7 @@ func prepareCommand(info commandInfo) (string, error) {
 
 	args := strings.Join(info.args, " ")
 
-	return fmt.Sprintf("docker run --rm -t -i -v%s:%s -v%s:/go/pkg/mod -w%s %s %s",
+	return fmt.Sprintf("docker run --rm -i -v%s:%s -v%s:/go/pkg/mod -w%s %s %s",
 		workingDir, moduleContainerPath, modPath, moduleContainerPath, info.dockerImage, args), nil
 }
 
@@ -125,4 +132,11 @@ func goModPath() (string, error) {
 type commandInfo struct {
 	dockerImage string
 	args        []string
+}
+
+func runCommand(command string) error {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
